@@ -1,19 +1,19 @@
 import type { LLMRequest, TokenChunk } from "./types.js";
+import "dotenv/config";
 
-export function calculateTokenEntropy(
-  topLogProbs: Array<{ token: string; logprob: number }>,
+export function calculateUncertainty(
+  chosenLogprob: number,
+  topLogprobs?: Array<{ token: string; logprob: number }>,
 ): number {
-  if (!topLogProbs || topLogProbs.length === 0) {
-    return 0;
+  const p1 = Math.exp(chosenLogprob);
+  if (!topLogprobs || topLogprobs.length < 2) {
+    return Number((1 - p1).toFixed(4));
   }
-  const probs = topLogProbs.map((item) => Math.exp(item.logprob));
-  const sumProbs = probs.reduce((a, b) => a + b, 0);
-  const normalizedProbs = probs.map((p) => p / sumProbs);
-  const entropy = -normalizedProbs.reduce(
-    (sum, p) => sum + p * Math.log2(p),
-    0,
-  );
-  return Number(entropy.toFixed(4));
+
+  const p2 = Math.exp(topLogprobs[1].logprob);
+  const margin = p1 - p2;
+  const uncertainty = 1 - margin;
+  return Number(Math.max(0, Math.min(1, uncertainty)).toFixed(4));
 }
 
 export async function* streamLocalOllama(
@@ -23,9 +23,7 @@ export async function* streamLocalOllama(
 ): AsyncGenerator<TokenChunk> {
   const response = await fetch("http://localhost:11434/api/chat", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     signal: abortSignal,
     body: JSON.stringify({
       model,
@@ -43,7 +41,7 @@ export async function* streamLocalOllama(
         repeat_penalty: req.sampling.repetitionPenalty,
         num_predict: req.sampling.maxTokens,
         num_ctx: 2048,
-        num_threads: 3,
+        num_thread: 3,
       },
     }),
   });
@@ -51,30 +49,119 @@ export async function* streamLocalOllama(
   if (!response.ok || !response.body) {
     throw new Error(`Ollama Error: ${response.status} ${response.statusText}`);
   }
+
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const data = JSON.parse(line);
+
+        if (data.message?.content) {
+          const logprobEntry = data.logprobs?.[0];
+          const uncertainty =
+            logprobEntry?.logprob !== undefined
+              ? calculateUncertainty(
+                  logprobEntry.logprob,
+                  logprobEntry.top_logprobs,
+                )
+              : undefined;
+
+          yield {
+            token: data.message.content,
+            logprob: logprobEntry?.logprob,
+            entropy: uncertainty,
+            provider: "ollama-local",
+          };
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export async function* streamFrontierHandoff(
+  req: LLMRequest,
+  partialAssistantResponse: string,
+): AsyncGenerator<TokenChunk> {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY;
+
+  if (!apiKey) {
+    const continuationPrompt = `${req.userPrompt}\n\n[Continue this exact partial response seamlessly without repeating it]:\n${partialAssistantResponse}`;
+    for await (const chunk of streamLocalOllama("deepseek-r1:1.5b", {
+      ...req,
+      userPrompt: continuationPrompt,
+    })) {
+      yield { ...chunk, provider: "cloud-frontier" };
+    }
+    return;
+  }
+
+  const isGemini = Boolean(process.env.GEMINI_API_KEY);
+  const url = isGemini
+    ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    : "https://openrouter.ai/api/v1/chat/completions";
+  const model = isGemini ? "gemini-2.5-flash" : "recursive/flint-v1.0:free";
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      stream: true,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: req.systemPrompt },
+        {
+          role: "user",
+          content: `${req.userPrompt}\n\nIMPORTANT: Continue the assistant response from the exact last word below. Do NOT repeat the prefix:\n\n${partialAssistantResponse}`,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(
+      `Frontier API Error: ${response.status} ${await response.text()}`,
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+
     buffer += decoder.decode(value, { stream: true });
-    let lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
     for (const line of lines) {
-      if (line.trim() === "") continue;
-      const data = JSON.parse(line);
-      if (data.message?.content) {
-        const logprobEntry = data.logprobs?.[0];
-        const entropy = logprobEntry?.top_logprobs
-          ? calculateTokenEntropy(logprobEntry.top_logprobs)
-          : undefined;
-        yield {
-          token: data.message.content,
-          logprob: logprobEntry?.logprob,
-          entropy,
-          provider: "ollama-local",
-        };
-      }
+      const trimmed = line.replace(/^data:\s*/, "").trim();
+      if (!trimmed || trimmed === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        const content = parsed.choices?.[0]?.delta?.content;
+        if (content) {
+          yield { token: content, provider: "cloud-frontier" };
+        }
+      } catch {}
     }
   }
 }
