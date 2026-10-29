@@ -1,11 +1,11 @@
-import { speculativeCascadeStream } from "./cascade.js";
+import { bufferedCascadeStream } from "./cascade.js";
 
 async function main() {
   console.log(
-    `\nTesting Speculative Cascade Router (Local Qwen 0.5B -> Frontier)...\n`,
+    `\nTesting Buffered Cascade Router (Local llama3.1:8b -> Frontier)...\n`,
   );
 
-  const stream = speculativeCascadeStream(
+  const stream = bufferedCascadeStream(
     {
       systemPrompt: "You are a principal distributed systems engineer.",
       userPrompt:
@@ -18,7 +18,8 @@ async function main() {
         maxTokens: 250,
       },
     },
-    0.72,
+    0.95,
+    3,
   );
 
   for await (const chunk of stream) {

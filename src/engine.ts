@@ -1,3 +1,4 @@
+import { partial } from "zod/mini";
 import type { LLMRequest, TokenChunk } from "./types.js";
 import "dotenv/config";
 
@@ -21,7 +22,8 @@ export async function* streamLocalOllama(
   req: LLMRequest,
   abortSignal?: AbortSignal,
 ): AsyncGenerator<TokenChunk> {
-  const response = await fetch("http://localhost:11434/api/chat", {
+  const KAGGLE_PROXY_URL = process.env.KAGGLE_PROXY_URL;
+  const response = await fetch(`${KAGGLE_PROXY_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal: abortSignal,
@@ -112,7 +114,15 @@ export async function* streamFrontierHandoff(
   const url = isGemini
     ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     : "https://openrouter.ai/api/v1/chat/completions";
-  const model = isGemini ? "gemini-2.5-flash" : "recursive/flint-v1.0:free";
+  const model = isGemini ? "gemini-3.8-flash" : "recursive/flint-v1.0:free";
+
+  const messages = [
+    { role: "system", content: req.systemPrompt },
+    {
+      role: "user",
+      content: `${req.userPrompt}\n\n=== CONTINUATION INSTRUCTIONS ===\nI have already started answering this, but got cut off. Here is the exact prefix of my response:\n\n${partialAssistantResponse}\n\nContinue the response immediately from the next word. DO NOT repeat the prefix. DO NOT add introductory text (like "Here is the rest"). Just seamlessly complete the sentence.`,
+    },
+  ];
 
   const response = await fetch(url, {
     method: "POST",
@@ -124,13 +134,7 @@ export async function* streamFrontierHandoff(
       model,
       stream: true,
       temperature: 0.2,
-      messages: [
-        { role: "system", content: req.systemPrompt },
-        {
-          role: "user",
-          content: `${req.userPrompt}\n\nIMPORTANT: Continue the assistant response from the exact last word below. Do NOT repeat the prefix:\n\n${partialAssistantResponse}`,
-        },
-      ],
+      messages: messages,
     }),
   });
 
