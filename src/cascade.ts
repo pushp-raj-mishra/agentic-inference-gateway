@@ -17,27 +17,50 @@ export async function* bufferedCascadeStream(
       req,
       abortController.signal,
     );
-    // const recentUncertainties: number[] = [];
-    // const recentUncertaintyWindow = 5;
-    // let rollingAverage = 0;
+
+    const stopwords = new Set([
+      "a",
+      "an",
+      "the",
+      "and",
+      "or",
+      "but",
+      "is",
+      "are",
+      "was",
+      "were",
+      "to",
+      "in",
+      "on",
+      "at",
+      "with",
+      "for",
+      "of",
+      "that",
+      "this",
+      "it",
+    ]);
+    let consecutiveSpikes = 0;
     let tokenCount = 0;
+
     for await (const chunk of localStream) {
       lookaheadBuffer.push(chunk);
-      // recentUncertainties.push(chunk.entropy ?? 0);
-      // if (recentUncertainties.length > recentUncertaintyWindow) {
-      //   recentUncertainties.shift();
-      // }
-      // rollingAverage =
-      //   recentUncertainties.reduce((sum, val) => sum + val, 0) /
-      //   recentUncertainties.length;
       tokenCount++;
+
+      const cleanToken = chunk.token.trim().toLowerCase();
       const isWord = /[a-zA-Z0-9]{2,}/.test(chunk.token);
+      const isStopword = stopwords.has(cleanToken);
       if (
-        tokenCount > 10 &&
         isWord &&
+        isStopword &&
         chunk.entropy !== undefined &&
         chunk.entropy > uncertaintyThreshold
       ) {
+        consecutiveSpikes++;
+      } else {
+        consecutiveSpikes = 0;
+      }
+      if (tokenCount > 10 && consecutiveSpikes >= 2) {
         handedOff = true;
         abortController.abort();
         break;
@@ -63,7 +86,7 @@ export async function* bufferedCascadeStream(
 
   if (handedOff) {
     yield {
-      token: `safely yielded text: "${safelyYieldedText}"\n\n\x1b\x1b[0m `,
+      token: `\nsafely yielded text: "${safelyYieldedText}"\n\n\x1b\x1b[0m `,
       provider: "cloud-frontier",
     };
     yield {

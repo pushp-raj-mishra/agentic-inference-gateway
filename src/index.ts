@@ -18,7 +18,7 @@ async function main() {
         maxTokens: 250,
       },
     },
-    0.95,
+    0.78,
     3,
   );
 

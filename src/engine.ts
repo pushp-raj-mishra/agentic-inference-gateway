@@ -22,8 +22,8 @@ export async function* streamLocalOllama(
   req: LLMRequest,
   abortSignal?: AbortSignal,
 ): AsyncGenerator<TokenChunk> {
-  const KAGGLE_PROXY_URL = process.env.KAGGLE_PROXY_URL;
-  const response = await fetch(`${KAGGLE_PROXY_URL}/api/chat`, {
+  const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL;
+  const response = await fetch(`${LOCAL_MODEL_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal: abortSignal,
