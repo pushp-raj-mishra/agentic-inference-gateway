@@ -1,5 +1,5 @@
 import { streamLocalOllama, streamFrontierHandoff } from "./engine.js";
-import type { LLMRequest, TokenChunk } from "./types.js";
+import type { LLMRequest, TokenChunk } from "../types/index.js";
 
 export async function* bufferedCascadeStream(
   req: LLMRequest,

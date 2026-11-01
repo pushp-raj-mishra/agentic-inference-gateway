@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { streamLocalOllama } from "./engine.js";
+import { streamLocalOllama } from "../inference/engine.js";
 
 export const ExtractionSchema = z.object({
   technologies: z.array(z.string()),

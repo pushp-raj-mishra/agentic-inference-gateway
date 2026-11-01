@@ -1,4 +1,4 @@
-import { bufferedCascadeStream } from "./cascade.js";
+import { bufferedCascadeStream } from "./inference/cascade.js";
 
 async function main() {
   console.log(

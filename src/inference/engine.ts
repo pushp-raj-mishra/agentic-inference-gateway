@@ -1,5 +1,4 @@
-import { partial } from "zod/mini";
-import type { LLMRequest, TokenChunk } from "./types.js";
+import type { LLMRequest, TokenChunk } from "../types/index.js";
 import "dotenv/config";
 
 export function calculateUncertainty(
@@ -11,7 +10,12 @@ export function calculateUncertainty(
     return Number((1 - p1).toFixed(4));
   }
 
-  const p2 = Math.exp(topLogprobs[1].logprob);
+  const secondBest = topLogprobs[1];
+  if (!secondBest) {
+    return Number((1 - p1).toFixed(4));
+  }
+
+  const p2 = Math.exp(secondBest.logprob);
   const margin = p1 - p2;
   const uncertainty = 1 - margin;
   return Number(Math.max(0, Math.min(1, uncertainty)).toFixed(4));
@@ -23,10 +27,9 @@ export async function* streamLocalOllama(
   abortSignal?: AbortSignal,
 ): AsyncGenerator<TokenChunk> {
   const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL;
-  const response = await fetch(`${LOCAL_MODEL_URL}/api/chat`, {
+  const requestInit: RequestInit = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    signal: abortSignal,
     body: JSON.stringify({
       model,
       stream: true,
@@ -46,7 +49,13 @@ export async function* streamLocalOllama(
         num_thread: 3,
       },
     }),
-  });
+  };
+
+  if (abortSignal) {
+    requestInit.signal = abortSignal;
+  }
+
+  const response = await fetch(`${LOCAL_MODEL_URL}/api/chat`, requestInit);
 
   if (!response.ok || !response.body) {
     throw new Error(`Ollama Error: ${response.status} ${response.statusText}`);
@@ -79,12 +88,19 @@ export async function* streamLocalOllama(
                 )
               : undefined;
 
-          yield {
+          const tokenChunk: TokenChunk = {
             token: data.message.content,
-            logprob: logprobEntry?.logprob,
-            entropy: uncertainty,
             provider: "ollama-local",
           };
+
+          if (logprobEntry?.logprob !== undefined) {
+            tokenChunk.logprob = logprobEntry.logprob;
+          }
+          if (uncertainty !== undefined) {
+            tokenChunk.entropy = uncertainty;
+          }
+
+          yield tokenChunk;
         }
       }
     }
