@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { streamLocalOllama } from "../inference/engine.js";
+import { compilePrompt } from "./promptCompiler.js";
 
 const MOCK_DATABASE: Record<string, string> = {
   redis: "STATUS: OOM (Out of Memory). Cache size exceeded 4GB",
@@ -28,16 +29,10 @@ const AgentResponseSchema = z.object({
 export async function runAgent(userText: string, maxSteps = 3) {
   let step = 1;
 
-  const systemPrompt = `You are a DevOps AI Agent. You have access to the following tool:
-        - "check_server_status": Fetches the current health of a service (e.g., redis, postgresql,api-gateway).
-        You must respond to the user query in the following JSON format:
-        {
-          "thought": "Your internal reasoning about what to do next",
-          "action": "check_server_status" | "final_answer",
-          "actionInput": "The service name if checking status, or final answer to user"
-        }
-        CRITICAL RULE: Never call 'check_server_status' for a service you have already checked in the conversation history. If you have the status for all requested services, immediately output 'final_answer'.`;
+  console.log(`\n[SYSTEM] : Compiling prompt for user input: "${userText}"`);
+  const { systemPrompt, extractedData } = await compilePrompt(userText);
 
+  console.log(`\n[SYSTEM PROMPT COMPILED]:\n${systemPrompt}\n`);
   let conversationHistory = `User: ${userText}\n`;
 
   while (step <= maxSteps) {
@@ -92,4 +87,4 @@ export async function runAgent(userText: string, maxSteps = 3) {
 
 const testInput =
   "The frontend is timing out. Can you check the status of the api-gateway and redis to tell me which one is causing it?";
-runAgent(testInput, 5).then(console.log).catch(console.error);
+runAgent(testInput, 10).then(console.log).catch(console.error);
