@@ -34,6 +34,7 @@ export async function runAgent(userText: string, maxSteps = 3) {
 
   console.log(`\n[SYSTEM PROMPT COMPILED]:\n${systemPrompt}\n`);
   let conversationHistory = `User: ${userText}\n`;
+  const checkedServices = new Set<string>();
 
   while (step <= maxSteps) {
     console.log(`\n[AGENT STEP ${step} of ${maxSteps}]`);
@@ -67,6 +68,15 @@ export async function runAgent(userText: string, maxSteps = 3) {
       const validatedResult = AgentResponseSchema.parse(parsedObject);
 
       if (validatedResult.action === "check_server_status") {
+        const serviceName = validatedResult.actionInput.toLowerCase();
+        if (checkedServices.has(serviceName)) {
+          console.log(
+            `\n[AGENT ERROR]: Attempted to check '${serviceName}' again. This is not allowed.`,
+          );
+          conversationHistory += `Agent: ${JSON.stringify(validatedResult)}\nTool Output: SYSTEM ERROR - You have already checked '${serviceName}'. DO NOT check it again. You must output 'final_answer' immediately using the data you already have.\n`;
+          continue;
+        }
+        checkedServices.add(serviceName);
         const status = checkServerStatus(validatedResult.actionInput);
         conversationHistory += `Agent: ${JSON.stringify(validatedResult)}\nTool Output: ${status}\n`;
       } else if (validatedResult.action === "final_answer") {
